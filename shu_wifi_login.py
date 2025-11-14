@@ -10,16 +10,29 @@ from requests import Response
 from urllib.parse import urlparse
 
 
-LOGIN_PAGE_URL = (
-    "http://10.10.9.9/eportal/index.jsp?"
-    "wlanuserip=6eed71b47ee3f3e4fb8087e45f7959a9&"
-    "wlanacname=6490c0a3a220e2c8&"
-    "ssid=6ae3954b35cf28b790001cca1f2b1cfc&"
-    "nasip=ee125bf0240ace65c22cc80cf4874cfc&"
-    "mac=7ea6ac09a0f80274b0458781bb58fdcf&"
-    "t=wireless-v2&"
-    "url=2c0328164651e2b4f13b933ddf36628bea622dedcc302b30"
-)
+# 不同校区的登录页面 URL，脚本会自动尝试每个 URL，直到找到可用的
+LOGIN_PAGE_URLS = [
+    (
+        "http://10.10.9.9/eportal/index.jsp?"
+        "wlanuserip=6eed71b47ee3f3e4fb8087e45f7959a9&"
+        "wlanacname=6490c0a3a220e2c8&"
+        "ssid=6ae3954b35cf28b790001cca1f2b1cfc&"
+        "nasip=ee125bf0240ace65c22cc80cf4874cfc&"
+        "mac=7ea6ac09a0f80274b0458781bb58fdcf&"
+        "t=wireless-v2&"
+        "url=2c0328164651e2b4f13b933ddf36628bea622dedcc302b30"
+    ),
+    (
+        "http://10.10.9.9/eportal/index.jsp?"
+        "wlanuserip=d2ece2b918fb0530b43d8f60ea393643&"
+        "wlanacname=4a5c93c8b07da3b9&"
+        "ssid=6ae3954b35cf28b790001cca1f2b1cfc&"
+        "nasip=1311923859b321a9aa6317ba21bda33e&"
+        "mac=7ea6ac09a0f80274b0458781bb58fdcf&"
+        "t=wireless-v2&"
+        "url=2c0328164651e2b4f13b933ddf36628bea622dedcc302b30"
+    ),
+]
 
 LOGIN_API_URL = "http://10.10.9.9/eportal/InterFace.do?method=login"
 LOGOUT_API_URL = "http://10.10.9.9/eportal/InterFace.do?method=logout"
@@ -94,33 +107,51 @@ def _ensure_success(result: Dict[str, Any]) -> None:
 
 
 def do_login(credentials: Optional[PortalCredentials] = None) -> Dict[str, Any]:
-    """执行登录请求，成功则返回门户返回的 JSON 数据。"""
+    """
+    执行登录请求，成功则返回门户返回的 JSON 数据。
+    
+    会自动尝试多个校区的登录页面 URL，直到找到可用的为止。
+    """
     credentials = credentials or PortalCredentials.from_env()
-    query_string = _extract_query_string(LOGIN_PAGE_URL)
-    payload = _build_login_payload(credentials, query_string)
+    last_error = None
+    
+    # 依次尝试每个校区的登录 URL
+    for login_page_url in LOGIN_PAGE_URLS:
+        try:
+            query_string = _extract_query_string(login_page_url)
+            payload = _build_login_payload(credentials, query_string)
 
-    with requests.Session() as session:
-        # 设置模拟浏览器的 HTTP 头，避免被门户判定为非正常访问。
-        session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-                ),
-                "Referer": LOGIN_PAGE_URL,
-                "Origin": "http://10.10.9.9",
-                "Accept": "*/*",
-                "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            }
-        )
+            with requests.Session() as session:
+                # 设置模拟浏览器的 HTTP 头，避免被门户判定为非正常访问。
+                session.headers.update(
+                    {
+                        "User-Agent": (
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+                        ),
+                        "Referer": login_page_url,
+                        "Origin": "http://10.10.9.9",
+                        "Accept": "*/*",
+                        "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+                        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    }
+                )
 
-        response = session.post(LOGIN_API_URL, data=payload, timeout=10)
-        response.raise_for_status()
+                response = session.post(LOGIN_API_URL, data=payload, timeout=10)
+                response.raise_for_status()
 
-        result = _interpret_response(response)
-        _ensure_success(result)
-        return result
+                result = _interpret_response(response)
+                _ensure_success(result)
+                return result
+        except (PortalLoginError, requests.RequestException) as exc:
+            # 记录错误，继续尝试下一个 URL
+            last_error = exc
+            continue
+    
+    # 所有 URL 都尝试失败，抛出最后一个错误
+    if last_error:
+        raise last_error
+    raise PortalLoginError("所有校区的登录 URL 都尝试失败")
 
 
 def do_logout(username: Optional[str] = None) -> Dict[str, Any]:
@@ -131,13 +162,15 @@ def do_logout(username: Optional[str] = None) -> Dict[str, Any]:
 
     with requests.Session() as session:
         # 注销接口同样需要携带 Referer/Origin 等头字段。
+        # 使用第一个 URL 作为 Referer（注销通常不依赖特定校区）
+        referer_url = LOGIN_PAGE_URLS[0] if LOGIN_PAGE_URLS else "http://10.10.9.9"
         response = session.post(
             LOGOUT_API_URL,
             data={"userId": username},
             timeout=10,
             headers={
                 "Origin": "http://10.10.9.9",
-                "Referer": LOGIN_PAGE_URL,
+                "Referer": referer_url,
                 "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             },
         )
