@@ -1,0 +1,11 @@
+# 本地凭证文件，切勿提交
+config.json
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

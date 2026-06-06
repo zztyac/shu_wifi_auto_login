@@ -1,12 +1,12 @@
 #!/bin/zsh
 
-# shu校园网 Wi-Fi 一键登录脚本
+# 上大（SHU）校园网 Wi-Fi 一键登录脚本
+#
+# 账号密码请在同目录的 config.json 中配置（参考 config.example.json）：
+#   {"username": "你的学号", "password": "你的密码"}
+# 也可通过环境变量 WIFI_USERNAME / WIFI_PASSWORD 提供。
 
-# 若需要自定义账号密码，可提前在此脚本前导出环境变量：
-#   export WIFI_USERNAME="你的账号"
-#   export WIFI_PASSWORD="你的密码"
-
-# 进入脚本所在目录，保证可以找到 Python 源文件。
+# 进入脚本所在目录，保证可以找到 Python 源文件与配置。
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
@@ -17,18 +17,25 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# 自动检测并安装 requests 依赖。
+if ! python3 -c "import requests" >/dev/null 2>&1; then
+  echo "正在安装依赖 requests ..."
+  python3 -m pip install --user requests || \
+    python3 -m pip install --user --break-system-packages requests
+fi
+
 # 执行登录脚本，捕获退出状态。
+# 注意：zsh 中 status 是只读内置变量，这里改用 exit_code。
 python3 "$SCRIPT_DIR/shu_wifi_login.py"
-status=$?
+exit_code=$?
 
 # 友好提示，并阻塞窗口，方便查看输出。
-if [ $status -eq 0 ]; then
+if [ $exit_code -eq 0 ]; then
   echo ""
-  echo "✅ 已尝试登录shu校园网 Wi-Fi。"
+  echo "✅ 已完成上大校园网 Wi-Fi 登录流程。"
 else
   echo ""
-  echo "⚠️ 登录过程出现错误，退出码：$status"
+  echo "⚠️ 登录过程出现错误，退出码：$exit_code"
 fi
 
 read -r "?按回车关闭窗口"
-
